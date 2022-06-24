@@ -2,6 +2,7 @@ from mqtt_Client import MQTT_Client
 from piDriver import PiDriver
 from piCamera import PiCamera
 from us_Sensor import US_Sensor
+#from laneDetector import LaneDetector
 import cv2
 import signal
 import threading
@@ -10,10 +11,18 @@ import numpy as np
 
 class SmartCar:
     def __init__(self):
+        # Creating smart car components
         self.client = MQTT_Client()
         self.driver = PiDriver()
         self.camera = PiCamera()
         self.us_sensor = US_Sensor(5,6)
+        
+        # Initiating lane detector threshold values
+        #self.lane_detector = LaneDetector()
+        #self.lane_detector.working_color_space = 'HSV'
+        #self.lane_detector.update_threshold_values('HSV')
+        
+        # Defining car params
         self.params = { 'help':False,
                         'debug':False,
                         'capture':False }
@@ -23,31 +32,37 @@ class SmartCar:
         self.driver.debug = True
         self.camera.debug = True
         self.us_sensor.debug = False
+        #self.lane_detector.debug = True
 
     def start(self):
         # Initiating MQTT client as well as loop
-        #self.client.connect()
-        #self.client.loop_start()
-        
+        self.client.connect()
+        self.client.loop_start()
+        measurement_count = 0
         # Create deamon thread for reading ultrasonic_sensor
         threading.Thread(target=self.us_sensor.start, daemon=True).start()
         
         try:
             while(self.camera.cap.isOpened()):
                 # Checking there's no risk of colission
-                if self.us_sensor.distance < 6:
+                dist = min(self.us_sensor.distance, 50)
+                measurement_count += 1
+                if measurement_count == 5:
+                    self.client.publish(topic='PiCarDistance', payload=dist)
+                    measurement_count = 0
+                
+                if dist < 6:
                     if not self.colission:
                         self.driver.stop()
                         self.colission = True
-                elif self.us_sensor.distance > 10:
+                        self.client.publish(topic='ColissionRisk', payload=self.colission)
+                elif dist > 10:
                     self.colission = False
+                    self.client.publish(topic='ColissionRisk', payload=self.colission)
                 
                 # Obtaining frame
                 ret, frame = self.camera.cap.read()
                 
-                # Sending image data to external computer for processing
-                self.client.publish(topic='PiCarFrame', payload=str(bytearray(frame)))
-
                 # Catching user input
                 key = cv2.waitKey(1) & 0xFF
 
@@ -59,6 +74,9 @@ class SmartCar:
                 # Otherwise execute user command
                 self.__user_command(key)
                 if self.params['help']: self.__show_help(frame)
+                
+                # Finding lanes in the frame
+                #self.lane_detector.find_center_reference(frame, interest_percentage=0.5, draw=True)
 
                 # Showing frame
                 cv2.imshow('PiCamera', frame)
@@ -77,8 +95,8 @@ class SmartCar:
         self.__on_x_press()
         
         # Disconnecting from broker
-        #self.client.loop_stop()
-        #self.client.disconnect()
+        self.client.loop_stop()
+        self.client.disconnect()
         
     def __sync_camera_steer(self):
         # Find out the value of the steering angle (50-140)

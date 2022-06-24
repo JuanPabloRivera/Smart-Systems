@@ -54,4 +54,4 @@ class PiDriver:
 
     def stop(self):
         self.params['speed'] = 0
-        self.back_wheels.speed = 0
+        self.back_wheels.stop()
