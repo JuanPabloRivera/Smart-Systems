@@ -2,8 +2,7 @@ import cv2
 import numpy as np
 
 class laneDetector:
-    @classmethod
-    def __init__(self):
+    def __init__(self, degree):
         # Threshold values
         self.threshold_vals = (np.array([0,0,0]),np.array([255,255,255]))
         
@@ -21,13 +20,12 @@ class laneDetector:
         self.fitted_right = False
         
         # Polynomial fit degree
-        self.degree = 3
+        self.degree = degree
         
         # Starting polynomial values
         self.prev_left_fit = [0 for _ in range(self.degree+1)]
         self.prev_right_fit = [0 for _ in range(self.degree+1)]
     
-    @classmethod
     def read_threshold_values(self, color_space):
         # Reading threshhold values for the mask
         threshold_vals = []
@@ -36,8 +34,7 @@ class laneDetector:
             threshold_vals.append(np.array([int(x) for x in line.strip().split()]))
         self.threshold_vals = threshold_vals
     
-    @staticmethod
-    def get_binary_threshold(frame, threshold_values):
+    def get_binary_threshold(self, frame, threshold_values):
         # Masking the frame with the threshold values
         mask = cv2.inRange(frame, threshold_values[0], threshold_values[1])
         masked = cv2.bitwise_and(frame, frame, mask=mask)
@@ -46,20 +43,18 @@ class laneDetector:
         #edges = cv2.Canny(masked,100,200)
 
         # Getting a thresolded image
-        gray = masked[:,:,0]+masked[:,:,1]  #gray = H values + S values
+        gray = masked[:,:,0]+masked[:,:,1]+masked[:,:,2]  #gray = H values + S values + V values
         ret, gray = cv2.threshold(gray, 5, 255, cv2.THRESH_BINARY)
 
         return gray
     
-    @staticmethod
-    def get_roi(frame, interest_percentage):
+    def get_roi(self, frame, interest_percentage):
         x_end = frame.shape[1]
         y_end = round(frame.shape[0]*(1-interest_percentage))
         black_region = np.zeros((y_end, x_end))
         frame[0:y_end, 0:x_end] = black_region
     
-    @staticmethod
-    def get_windows_values(frame, nonzerox, nonzeroy, x_values, n_windows, window_height, width_margin, min_recenter_pixels, downwards=False):    
+    def get_windows_values(self, frame, nonzerox, nonzeroy, x_values, n_windows, window_height, width_margin, min_recenter_pixels, downwards=False):    
         # list of points
         values = dict()
 
@@ -106,15 +101,14 @@ class laneDetector:
 
         return values
     
-    @staticmethod
-    def get_bad_window_limit(windows):
+    def get_bad_window_limit(self, windows):
         for i, window in enumerate(windows):
             if window: return i-1
         return len(windows)
     
-    @staticmethod
-    def get_windows_with_histogram(frame, x_current, nwindows=10, min_recenter_pixels=25, width_margin=50):    
+    def get_windows_with_histogram(self, frame, x_current, min_recenter_pixels=50, width_margin=50, correct_windows=False):    
         # Window height
+        nwindows = self.nwindows
         window_height = frame.shape[0]//(2*nwindows)
 
         # Pixels that are non zero
@@ -122,40 +116,42 @@ class laneDetector:
         nonzeroy = np.array(nonzero[0])
         nonzerox = np.array(nonzero[1])
 
-        values = laneDetector.get_windows_values(frame=frame, nonzerox=nonzerox, nonzeroy=nonzeroy, x_values=[x_current], n_windows=nwindows, window_height=window_height, width_margin=width_margin, min_recenter_pixels=min_recenter_pixels)
-        bad_limit = laneDetector.get_bad_window_limit(values['windows'])
+        values = self.get_windows_values(frame=frame, nonzerox=nonzerox, nonzeroy=nonzeroy, x_values=[x_current], n_windows=nwindows, window_height=window_height, width_margin=width_margin, min_recenter_pixels=min_recenter_pixels)
+    
+        if correct_windows:
+            bad_limit = self.get_bad_window_limit(values['windows'])
+            if  -1 < bad_limit < nwindows: # if there's at least 1 bad window and not all of them are bad
+                good_nearest = values['x_points'][bad_limit+1] 
+                fixed_values = self.get_windows_values(frame=frame, nonzerox=nonzerox, nonzeroy=nonzeroy, x_values=[good_nearest], n_windows=bad_limit+1, window_height=window_height, width_margin=width_margin, min_recenter_pixels=min_recenter_pixels, downwards=True)
 
-        if  -1 < bad_limit < nwindows: # if there's at least 1 bad window and not all of them are bad
-            good_nearest = values['x_points'][bad_limit+1] 
-            fixed_values = laneDetector.get_windows_values(frame=frame, nonzerox=nonzerox, nonzeroy=nonzeroy, x_values=[good_nearest], n_windows=bad_limit+1, window_height=window_height, width_margin=width_margin, min_recenter_pixels=min_recenter_pixels, downwards=True)
+                #Assigning our new fixed values 
+                values['x_points'][:bad_limit+1] = fixed_values['x_points']
+                values['corners'][:bad_limit+1] = fixed_values['corners']
 
-            #Assigning our new fixed values 
-            values['x_points'][:bad_limit+1] = fixed_values['x_points']
-            values['corners'][:bad_limit+1] = fixed_values['corners']
-
-            # Finally re-sweeping the windows through to adjust upper windows
-            values = laneDetector.get_windows_values(frame=frame, nonzerox=nonzerox, nonzeroy=nonzeroy, x_values=[values['x_points'][0]], n_windows=nwindows, window_height=window_height, width_margin=width_margin, min_recenter_pixels=min_recenter_pixels)
+                # Finally re-sweeping the windows through to adjust upper windows
+                values = self.get_windows_values(frame=frame, nonzerox=nonzerox, nonzeroy=nonzeroy, x_values=[values['x_points'][0]], n_windows=nwindows, window_height=window_height, width_margin=width_margin, min_recenter_pixels=min_recenter_pixels)
+        
         return values['x_points'], values['y_points'], values['corners'], values['windows']
     
-    @staticmethod
-    def get_windows_with_polynomial(frame, fit, nwindows=10, min_recenter_pixels=25, width_margin=50):
+    def get_windows_with_polynomial(self, frame, fit, min_recenter_pixels=50, width_margin=50):
         # Window height
+        nwindows = self.nwindows
         window_height = frame.shape[0]//(2*nwindows)
 
         # Getting our defined y values to compute the x ones
-        x_vals = np.polyval(fit, self.y_points).astype(int)
+        y_values = np.asarray([frame.shape[0]-(window_height//2 + window_height*window) for window in range(nwindows)])
+        x_vals = np.polyval(fit, y_values).astype(int)
 
         # Pixels that are non zero
         nonzero = frame.nonzero()
         nonzeroy = np.array(nonzero[0])
         nonzerox = np.array(nonzero[1])
 
-        values = laneDetector.get_windows_values(frame=frame, nonzerox=nonzerox, nonzeroy=nonzeroy, x_values=x_vals, n_windows=nwindows, window_height=window_height, width_margin=width_margin, min_recenter_pixels=min_recenter_pixels)
+        values = self.get_windows_values(frame=frame, nonzerox=nonzerox, nonzeroy=nonzeroy, x_values=x_vals, n_windows=nwindows, window_height=window_height, width_margin=width_margin, min_recenter_pixels=min_recenter_pixels)
         return values['x_points'], values['y_points'], values['corners'], values['windows']
     
-    @staticmethod
-    def fit_poly_points(x_points, y_points, degree=2, x_range=(0,100)):
-        fit = np.polyfit(x_points, y_points, degree)
+    def fit_poly_points(self, x_points, y_points, x_range=(0,100)):
+        fit = np.polyfit(x_points, y_points, self.degree)
         x_vals = np.arange(x_range[0], x_range[1])
 
         try:
@@ -165,8 +161,8 @@ class laneDetector:
 
         return fit, (x_vals, y_vals)
     
-    @classmethod
     def find_reference(self, frame):
+        left_pred = right_pred = 'none'
         # Creating the frame were we're gonna see the regression and windows
         frame_debug = frame.copy()
 
@@ -174,112 +170,126 @@ class laneDetector:
         hsv_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
         # Choosing the frame we are gonna use for the lane detection sliding windows -> gray; hough lines -> edges
-        working_frame = laneDetector.get_binary_threshold(hsv_frame, self.threshold_vals)
+        working_frame = self.get_binary_threshold(hsv_frame, self.threshold_vals)
 
         # Taking into account only certain percetage of the image (bottom half)
-        laneDetector.get_roi(working_frame, 0.5)
+        self.get_roi(working_frame, 0.5)
 
-        # Getting the window center points for both left and right lane
-        # If there is no fitted curve 
+        # Getting the window center points for both left and right lane-----------------------------------------------------------------
+        # If there is no fitted curve
+        left_reference = False
+        right_reference = False
+        
+        # Find window centers with histogram if there's no polynomial fitted
         if not self.fitted_left: 
             histogram = np.sum(working_frame[working_frame.shape[0]//2:, :working_frame.shape[1]//2], axis=0) # Half of the frame width
             left_xcurrent = np.argmax(histogram)
-            try:
-                (left_xpoints, y_points, left_corners, self.left_windows) = laneDetector.get_windows_with_histogram(working_frame, left_xcurrent, nwindows=self.nwindows, min_recenter_pixels=25, width_margin=50) 
-            except Exception as e:
-                print(e)
-
+            (left_xpoints, y_points, left_corners, self.left_windows) = self.get_windows_with_histogram(working_frame, left_xcurrent, min_recenter_pixels=75, width_margin=50) 
         # Else fit the polynomial with the window centers
         else:
-            try:
-                (left_xpoints, y_points, left_corners, self.left_windows) = laneDetector.get_windows_with_polynomial(working_frame, self.prev_left_fit, nwindows=self.nwindows, min_recenter_pixels=25, width_margin=50)
-            except Exception as e:
-                print(e)
+            (left_xpoints, y_points, left_corners, self.left_windows) = self.get_windows_with_polynomial(working_frame, self.prev_left_fit, min_recenter_pixels=75, width_margin=50)
+        # Check if there are enough good windows to fit a polynomial
+        if sum(self.left_windows) > self.degree+1: left_reference = True
 
-        # If there are not enough valid windows to fit a polynomial
+        # Find window centers with histogram if there's no polynomial fitted
         if not self.fitted_right:
             histogram = np.sum(working_frame[working_frame.shape[0]//2:, working_frame.shape[1]//2:], axis=0) # Half of the frame width
             right_xcurrent = np.argmax(histogram) + working_frame.shape[1]//2
-            
-            try:
-                (right_xpoints, y_points, right_corners, self.right_windows) = laneDetector.get_windows_with_histogram(working_frame, right_xcurrent, nwindows=self.nwindows, min_recenter_pixels=25, width_margin=50) 
-            except Exception as e:
-                print(e)
-
+            (right_xpoints, y_points, right_corners, self.right_windows) = self.get_windows_with_histogram(working_frame, right_xcurrent, min_recenter_pixels=75, width_margin=50) 
         # Else fit the polynomial
         else:
-            try:
-                (right_xpoints, y_points, right_corners, self.right_windows) = laneDetector.get_windows_with_polynomial(working_frame, self.prev_right_fit, nwindows=self.nwindows, min_recenter_pixels=25, width_margin=50)
-            except Exception as e:
-                print(e)
+            (right_xpoints, y_points, right_corners, self.right_windows) = self.get_windows_with_polynomial(working_frame, self.prev_right_fit, min_recenter_pixels=75, width_margin=50)
+        # Check if there are enough good windows to fit a polynomial
+        if sum(self.right_windows) > self.degree+1: right_reference = True
+        
+        # Defining the points where the windows found valud pixels
+        good_x_left = left_xpoints[self.left_windows]
+        good_y_left = y_points[self.left_windows]
+        good_x_right = right_xpoints[self.right_windows]
+        good_y_right = y_points[self.right_windows]    
+        
+        # Check if the windows are merging, in which case there's only one reference to follow instead of 2
+        merged = False
 
-        # Drawing windows and it's centers -------------------------------------------------------------------------------------------------------
-        try:
-            for i, val in enumerate(self.left_windows):
-                color = (0,255,255) if val else (255,0,255)
-                cv2.circle(frame_debug, (left_xpoints[i], y_points[i]), 2, color, 2)
-                cv2.rectangle(frame_debug, (left_corners[i][0][0], left_corners[i][0][1]), (left_corners[i][1][0], left_corners[i][1][1]), (0,0,255), 2)
-        except Exception as e:
-            print('left windows center points are yet not defined', e)
+        # If there are enough points for the polynomial, check that they are not merging
+        # If any of the points from both lanes are the same, means we're merging, we don't want that
+        if left_reference and right_reference:
+            for left_point, right_point in zip(left_xpoints, right_xpoints):
+                # We only need to check the x coordinate, we know the y coordinate will be the same
+                if abs(left_point-right_point) < 25:
+                    merged = True
+                    break
+                
+            # Then, if we're merging, let's check to which direction the line is curving, so we know if it's the left or right lane
+            if merged:
+                if not self.fitted_left and not self.fitted_right:
+                    count = 0
+                    for i in range(len(good_x_left)-1):
+                        if good_x_left[i] < good_x_left[i+1]: count += 1 # If the next point is to the right
+                        elif good_x_left[i] > good_x_left[i+1]: count -= 1 # If the next point is to the left
+                    left_pred = 'left' if count > 0 else 'right'
+                
+                    count = 0
+                    for i in range(len(good_x_right)-1):
+                        if good_x_right[i] < good_x_right[i+1]: count += 1
+                        elif good_x_right[i] > good_x_right[i+1]: count -= 1
+                    right_pred = 'left' if count > 0 else 'right'
+                
+                    if left_pred == 'left' and right_pred == 'left':
+                        left_reference = True
+                        right_reference = False
+                    elif left_pred == 'right' and right_pred == 'right':
+                        right_reference = True
+                        left_reference = False
+                else:
+                    left_reference = self.fitted_left
+                    right_reference = self.fitted_right
+            else:
+                left_reference = True
+                right_reference = True
 
-        try:
-            for i, val in enumerate(self.right_windows):
-                color = (0,255,255) if val else (255,0,255)
-                cv2.circle(frame_debug, (right_xpoints[i], y_points[i]), 2 , (0,255,255), 2)
-                cv2.rectangle(frame_debug, (right_corners[i][0][0], right_corners[i][0][1]), (right_corners[i][1][0], right_corners[i][1][1]), (0,0,255), 2)
-        except Exception as e:
-            print('right windows center points are yet not defined', e)
-
-        # Fitting a third degree polynomial curve to the points --------------------------------------------------------------------------------------
+        # Fitting a polynomial curve to the points --------------------------------------------------------------------------------------
         # if there are at least degree+1 points to fit a curve then do it
-        if sum(self.left_windows) > self.degree:
-            print(left_xpoints, self.left_windows)
-            good_x_left = left_xpoints[self.left_windows]
-            good_y_left = y_points[self.left_windows]
-
-            try:
-                self.prev_left_fit, left_fit = laneDetector.fit_poly_points(good_y_left, good_x_left, degree=self.degree, x_range=(working_frame.shape[0]//2, working_frame.shape[0]))
-                self.fit_attempt_left = True
-                for i in range(len(left_fit[0])):
-                    cv2.circle(frame_debug, (int(left_fit[1][i]), int(left_fit[0][i])), 1, (255,255,255), 1)
-            except Exception as e:
-                print('Not enough points to fit', e) 
-        else: self.fit_attempt_left = False
-
-        if sum(self.right_windows) > self.degree:
-            good_x_right = right_xpoints[self.right_windows]
-            good_y_right = y_points[self.right_windows]
-            try: 
-                self.prev_right_fit, right_fit = laneDetector.fit_poly_points(good_y_right, good_x_right, degree=self.degree, x_range=(working_frame.shape[0]//2, working_frame.shape[0]))
-                self.fit_attempt_right = True
-                # Drawing the 3rd degree poly curve
-                for i in range(len(right_fit[0])):
-                    cv2.circle(frame_debug, (int(right_fit[1][i]), int(right_fit[0][i])), 1, (255,255,255), 1)
-            except Exception as e:
-                print('Not enough points to fit', e)
-        else: self.fit_attempt_right = False
-
-        # Check if the lines are merging
-        # If we're trying to fit a left lane and it's not the same as an already fit right lane
-        if self.fit_attempt_left:
-            if self.fitted_right:
-                if all(self.prev_left_fit == self.prev_right_fit): self.fitted_left = False
-                else: self.fitted_left = True
-            else: self.fitted_left = True
+        left_mean = 0
+        right_mean = frame.shape[1]
+        
+        if left_reference:
+            self.prev_left_fit, left_fit = self.fit_poly_points(good_y_left, good_x_left, x_range=(working_frame.shape[0]//2, working_frame.shape[0]))
+            self.fitted_left = True
+            # Drawing the poly curve
+            for i in range(len(left_fit[0])):
+                cv2.circle(frame_debug, (int(left_fit[1][i]), int(left_fit[0][i])), 1, (255,255,255), 1)
         else: self.fitted_left = False
 
-        # If we're trying to fit a left lane and it's not the same as an already fit right lane
-        if self.fit_attempt_right:
-            if self.fitted_left:
-                if all(self.prev_left_fit == self.prev_right_fit): self.fitted_right = False
-                else: self.fitted_right = True
-            else: self.fitted_right = True
+        if right_reference:
+            self.prev_right_fit, right_fit = self.fit_poly_points(good_y_right, good_x_right, x_range=(working_frame.shape[0]//2, working_frame.shape[0]))
+            self.fitted_right = True
+            # Drawing the poly curve
+            for i in range(len(right_fit[0])):
+                cv2.circle(frame_debug, (int(right_fit[1][i]), int(right_fit[0][i])), 1, (255,255,255), 1)
         else: self.fitted_right = False
+           
+        if self.fitted_left: left_mean = np.mean(good_x_left)
+        if self.fitted_right: right_mean = np.mean(good_x_right)
+        center_reference = (left_mean+right_mean)/2
+        deviation = center_reference - frame.shape[1]/2
 
+        # Drawing windows and it's centers -------------------------------------------------------------------------------------------------------
+        for i, val in enumerate(self.left_windows):
+            color = (0,255,255) if val else (255,0,255)
+            cv2.circle(frame_debug, (left_xpoints[i], y_points[i]), 2, color, 2)
+            cv2.rectangle(frame_debug, (left_corners[i][0][0], left_corners[i][0][1]), (left_corners[i][1][0], left_corners[i][1][1]), (0,0,255), 2)
+
+        for i, val in enumerate(self.right_windows):
+            color = (0,255,255) if val else (255,0,255)
+            cv2.circle(frame_debug, (right_xpoints[i], y_points[i]), 2 , (0,255,255), 2)
+            cv2.rectangle(frame_debug, (right_corners[i][0][0], right_corners[i][0][1]), (right_corners[i][1][0], right_corners[i][1][1]), (0,0,255), 2)
+
+        # Drawing the lane polygon in the frame -------------------------------------------------------
         if self.fitted_left and self.fitted_right:
             # Drawing polygon with left and right window center values
-            poly_y = np.concatenate((good_y_left, good_y_right[::-1]), axis=None)
-            poly_x = np.concatenate((good_x_left, good_x_right[::-1]), axis=None)
+            poly_y = np.concatenate((y_points, y_points[::-1]), axis=None)
+            poly_x = np.concatenate((left_xpoints, right_xpoints[::-1]), axis=None)
 
             # Format taken by the fillPoly function np.array([[x1,y1],[x2,y2],[x3,y3],...] )
             poly_points = np.array([[x, y] for x, y in zip(poly_x, poly_y)], dtype = np.int32)
@@ -288,19 +298,27 @@ class laneDetector:
             lane_search_area = np.zeros(frame.shape, dtype=np.uint8)
             cv2.fillPoly(lane_search_area, [poly_points], (160,255,160))
             frame = cv2.addWeighted(src1=frame, alpha=0.6, src2=lane_search_area, beta=0.4, gamma = 0)
+            
+        cv2.circle(frame_debug, (int(left_mean), frame_debug.shape[0]-frame_debug.shape[0]//4), 3, (255,255,0), 3)
+        cv2.circle(frame_debug, (int(right_mean), frame_debug.shape[0]-frame_debug.shape[0]//4), 3, (255,255,0), 3)
+        cv2.circle(frame_debug, (int((left_mean+right_mean)/2), frame_debug.shape[0]-frame_debug.shape[0]//4), 3, (0,0,255), 3)
+            
+        # Lane info ------------------------------------------------------------------------------------
+        cv2.putText(img=frame_debug, text=f"merged: {merged}", org=(0,50), fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=0.5, color=(255,255,255), thickness=1, lineType=cv2.LINE_AA)
+        cv2.putText(img=frame_debug, text=f"left fit: {self.fitted_left}", org=(0,100), fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=0.5, color=(255,255,255), thickness=1, lineType=cv2.LINE_AA)
+        cv2.putText(img=frame_debug, text=f"right fit: {self.fitted_right}", org=(0,150), fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=0.5, color=(255,255,255), thickness=1, lineType=cv2.LINE_AA)
+        cv2.putText(img=frame_debug, text=f"left ref: {left_reference}", org=(0,200), fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=0.5, color=(255,255,255), thickness=1, lineType=cv2.LINE_AA)
+        cv2.putText(img=frame_debug, text=f"right ref: {right_reference}", org=(0,250), fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=0.5, color=(255,255,255), thickness=1, lineType=cv2.LINE_AA)
+        cv2.putText(img=frame_debug, text=f"left pred: {left_pred}", org=(0,300), fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=0.5, color=(255,255,255), thickness=1, lineType=cv2.LINE_AA)
+        cv2.putText(img=frame_debug, text=f"right pred: {right_pred}", org=(0,350), fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=0.5, color=(255,255,255), thickness=1, lineType=cv2.LINE_AA)
 
-        # Drawing line in the middle of the screen
+        # Drawing line in the middle of the screen ----------------------------------------------------------
         cv2.line(frame_debug, (frame_debug.shape[1]//2, 0), (frame_debug.shape[1]//2, frame_debug.shape[0]), (255,255,255), 1)
         
-        #cv2.imshow('frame', frame)
-        #cv2.imshow('debug', frame_debug)
-        #cv2.imshow('edges', edges)
-        #cv2.imshow('gray', working_frame)
-        
-        return frame, frame_debug
+        return deviation, frame, frame_debug, working_frame
         
 if __name__ == '__main__':
-    detector = laneDetector()
+    detector = laneDetector(2)
     detector.read_threshold_values('HSV')
     
     cap = cv2.VideoCapture(0)
@@ -312,12 +330,14 @@ if __name__ == '__main__':
             print('No frame')
             break
         
-        lanes, debug = detector.find_reference(frame)
+        deviation, lanes, debug, gray = detector.find_reference(frame)
         
         key = cv2.waitKey(1) & 0xFF
         if key == ord('q') or key == 27: break
         
-        cv2.imshow('lanes', lanes)
+        cv2.imshow('lanes', debug)
+        cv2.imshow('lanes2', gray)
+
         
     cap.release()
     cv2.destroyAllWindows()

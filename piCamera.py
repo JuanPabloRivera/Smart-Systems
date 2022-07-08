@@ -2,18 +2,17 @@ import picar
 import cv2
 
 class PiCamera:
-    def __init__(self, input_camera=0):
+    def __init__(self, ):#input_camera=0):
         self.debug = False
 
         # Creating a camera object
-        self.cap = cv2.VideoCapture(input_camera)
-
+        #self.cap = cv2.VideoCapture(input_camera)
 	# Checks whether the camera was opened successfully
-        if not self.cap.isOpened():
-            raise  RuntimeError("Unable to read camera feed")
+        #if not self.cap.isOpened():
+        #    raise  RuntimeError("Unable to read camera feed")
 
-        self.frame_width = int(self.cap.get(3))
-        self.frame_height = int(self.cap.get(4))
+        #self.frame_width = int(self.cap.get(3))
+        #self.frame_height = int(self.cap.get(4))
 
         # Creating servo motors for camera direction
         self.pan_servo = picar.Servo.Servo(1)

@@ -3,6 +3,8 @@ import uuid, random, string
 
 class MQTT_Client(mqtt.Client):
     def __init__(self):
+        # To store messages from subcriptions
+        self.messages = dict()
         # Creating a unique client id
         self.id = self.__generate_client_id()
         # Default broker address
@@ -20,6 +22,10 @@ class MQTT_Client(mqtt.Client):
             self.broker_address = broker_address
 
         super().connect(self.broker_address)
+        
+    def subscribe(self, topic):
+        self.messages[topic] = 'None'
+        super().subscribe(topic)
 
     def __generate_client_id(self):
         # Making a client_id 23 characters long
@@ -30,7 +36,8 @@ class MQTT_Client(mqtt.Client):
     def __on_message(self, client, userdata, msg):
         topic = msg.topic
         m_decode = str(msg.payload.decode("utf-8", "ignore"))
-        print("recieved message text:", m_decode)
+        self.messages[topic] = m_decode
+        print(f'{topic} message recieved: {m_decode}')
 
     def __on_connect(self, client, userdata, flags, rc):
         if rc:
